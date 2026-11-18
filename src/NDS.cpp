@@ -30,6 +30,7 @@
 #include "RTC.h"
 #include "Wifi.h"
 #include "Platform.h"
+#include "BuiltinSystem.h"
 
 
 namespace NDS
@@ -297,6 +298,9 @@ void InitTimings()
 
 void SetupDirectBoot()
 {
+    // FreeBIOS leaves a slot for the cartridge-provided logo, as modern melonDS does.
+    if (memcmp(ARM9BIOS, BuiltinSystem::bios_arm9_bin.data(), 0x20) == 0)
+        memcpy(ARM9BIOS + 0x20, NDSCart::CartROM + 0xC0, 0x9C);
     u32 bootparams[8];
     memcpy(bootparams, &NDSCart::CartROM[0x20], 8*4);
 

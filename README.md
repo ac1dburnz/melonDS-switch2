@@ -1,105 +1,101 @@
-<p align="center"><img src="https://raw.githubusercontent.com/StapleButter/melonDS/master/icon/melon_128x128.png"></p>
-<h2 align="center"><b>melonDS</b></h2>
-<p align="center">
-<a href="http://melonds.kuribo64.net/" alt="melonDS website"><img src="https://img.shields.io/badge/website-melonds.kuribo64.net-%2331352e.svg"></a>
-<a href="http://melonds.kuribo64.net/downloads.php" alt="Release: 0.8.3"><img src="https://img.shields.io/badge/release-0.8.3-%235c913b.svg"></a>
-<a href="https://www.gnu.org/licenses/gpl-3.0" alt="License: GPLv3"><img src="https://img.shields.io/badge/License-GPL%20v3-%23ff554d.svg"></a>
-<a href="https://kiwiirc.com/client/irc.badnik.net/?nick=IRC-Source_?#melonds" alt="IRC channel: #melonds"><img src="https://img.shields.io/badge/IRC%20chat-%23melonds-%23dd2e44.svg"></a>
-</p>
-DS emulator, sorta
+# Experimental melonDS Switch 2 port
 
-The goal is to do things right and fast, akin to blargSNES (but hopefully better). But also to, you know, have a fun challenge :)
-<hr>
+Based on Hydr8gon/melonDS `switch` commit 8fb3ae19af5a768a2e4fe6fc8fbacdc857b83103
+(melonDS 0.8.3 frontend). GPL-3.0-or-later; see LICENSE and upstream notices.
 
-## How to use
+This is an experimental Nintendo DS emulator port for Nintendo Switch 2.
+A user has confirmed Pokémon Black 2 starts after correcting the save database
+and save size. Broader game compatibility and performance remain unverified.
 
-melonDS requires BIOS/firmware copies from a DS. Files required:
- * bios7.bin, 16KB: ARM7 BIOS
- * bios9.bin, 4KB: ARM9 BIOS
- * firmware.bin, 128/256/512KB: firmware
+This is an unofficial port, based on the older Switch frontend. It is not an
+official melonDS release. See [upstream documentation](README.upstream.md).
 
-Firmware boot requires a firmware dump from an original DS or DS Lite.
-DS firmwares dumped from a DSi or 3DS aren't bootable and only contain configuration data, thus they are only suitable when booting games directly.
+Changes:
+- ounce-devkit/libounce build rules and Switch 2 CPU flags.
+- OunceVK EGL/OpenGL instead of the Switch 1 Nouveau libraries.
+- Current pad/touch API adapter, current thread creation signatures.
+- Explicit OpenGL 3.3 core context.
+- Removed Switch 1 clock-profile calls.
 
-### Possible firmware sizes
+This older frontend uses the interpreter, not a kaiHEN JIT. Expect performance limitations.
+The newer RSDuck frontend requires a deko3d renderer replacement and JIT integration.
 
- * 128KB: DSi/3DS DS-mode firmware (reduced size due to lacking bootcode)
- * 256KB: regular DS firmware
- * 512KB: iQue DS firmware
+## Building
 
-DS BIOS dumps from a DSi or 3DS can be used with no compatibility issues. DSi BIOS dumps (in DSi mode) are not compatible. Or maybe they are. I don't know.
-
-As for the rest, the interface should be pretty straightforward. If you have a question, don't hesitate to ask, though!
-
-## How to build
-
-### Linux:
-
-* Install dependencies:
+Clone this repository and [ounce-devkit](https://github.com/ouncebrew/ounce-devkit)
+into the same parent directory. The tested ounce-devkit revision is
+`75cea5538b3a57d8f2ecf53354274cf00a365d20`. From that parent directory:
 
 ```sh
-sudo apt-get install gtk+-3.0 libcurl4-gnutls-dev libpcap0.8-dev libsdl2-dev
+docker build -t melonds-ounce-devkit ounce-devkit
+docker run --rm -v "$PWD/melonds-switch2-port:/work/melonds" -w /work/melonds \
+  melonds-ounce-devkit sh -c 'dkp-pacman -S --needed --noconfirm switch-glad && make -j4'
 ```
 
-* Compile:
+## Files for a hardware test
+
+Copy **both** files into `/switch/melonds/`:
+
+- `melonds-switch2.nro` from your build.
+- `romlist.bin` from this repository.
+
+The database is required for correct game save sizes. If it is missing, an
+unknown game defaults to an 8 KB save; Pokémon Black 2 requires 512 KB. Installing
+the database does not resize saves already created incorrectly. Back up those
+saves before attempting repair. Saves are stored beside the game with the same
+basename and a `.sav` extension. Do not load an old save state after repairing
+a save file.
+
+Generate a complete install ZIP after building with:
 
 ```sh
-mkdir -p build
-cd build
-cmake ..
-make -j$(nproc --all)
+python3 tools/package-release.py
+```
+Put `.nds` game dumps in `/roms/nds/` and select one in the file browser.
+
+Original DS BIOS/firmware dumps are optional. On launch, missing `bios7.bin`,
+`bios9.bin`, and `firmware.bin` are created in `/switch/melonds/` from the open-source
+replacement BIOS and generated settings. Existing valid system files are preserved;
+malformed files report an error instead of being overwritten. Replacement mode forces
+direct game boot; it cannot start the original DS menu. Generated firmware contains no
+Nintendo boot code. This does not add DSi support or validate game compatibility.
+
+Replacement BIOS: Gilead Kutnick's custom BIOS as distributed by melonDS commit
+7897bd387bfd37615a049eba28d02dc23cfa5194. See FREEBIOS-LICENSE.txt; copyright and
+BSD-style license are retained in src/FreeBIOS.cpp. Firmware calibration tables and
+layout come from that melonDS revision's SPI_Firmware.cpp (GPL-3.0-or-later).
+
+Keep existing saves backed up before testing an unverified emulator port.
+Startup diagnostics: `/switch/melonds/switch2-startup.log`.
+
+## Validation
+
+Clean ounce-devkit cross-build passed. Host tests check generated file sizes,
+firmware header, checksums and calibration, repeated startup, preservation of
+existing files, malformed-file handling and filesystem errors. The user has confirmed the file browser and Pokémon Black 2 startup on
+Switch 2. There has been no broad compatibility, sustained gameplay, or speed validation.
+
+Host test (pass an empty temporary directory):
+
+```sh
+clang++ -std=c++17 -Isrc src/BuiltinSystem.cpp src/FreeBIOS.cpp \
+  tests/builtin_system.cpp -o /tmp/melonds-builtin-test
+/tmp/melonds-builtin-test /path/to/empty/test-directory
 ```
 
-### Windows:
+## Layout and controls
 
- * use CodeBlocks
-
-#### MSYS2 and CMake
-
-1. Install [MSYS2](https://www.msys2.org/)
-2. Open the **MSYS2 MinGW 64-bit** terminal
-3. Update the packages using `pacman -Syu` and reopen the terminal if it asks you to
-4. Install dependencies: `pacman -S git make mingw-w64-x86_64-{cmake,mesa,SDL2,toolchain}`
-5. Run the following commands
-   ```bash
-   git clone https://github.com/Arisotura/melonDS.git
-   cd melonDS
-   mkdir build
-   cd build
-   cmake .. -G "MSYS Makefiles"
-   make -j$(nproc --all)
-   ../msys-dist.sh
-   ```
-
-If everything went well, melonDS and the libraries it needs should now be in the `dist` folder.
-
-## TODO LIST
-
- * DSi emulation
- * the impossible quest of pixel-perfect 3D graphics
- * improve libui and the emulator UI
- * support for rendering screens to separate windows
- * emulating some fancy addons
- * other non-core shit (debugger, graphics viewers, cheat crapo, etc)
-
-### TODO LIST FOR LATER
-
- * better wifi
- * maybe emulate flashcarts or other fancy hardware
- * big-endian compatibility (Wii, etc)
- * LCD refresh time (used by some games for blending effects)
- * any feature you can eventually ask for that isn't outright stupid
+The existing Switch frontend provides screen layouts through its settings menu
+(ZL + ZR by default). Translucent picture-in-picture and a dedicated instant
+screen-swap control are planned; they are not implemented in this version.
 
 ## Credits
 
- * Martin for GBAtek, a good piece of documentation
- * Cydrak for the extra 3D GPU research
- * All of you comrades who have been testing melonDS, reporting issues, suggesting shit, etc
+- melonDS contributors and Arisotura: emulator core.
+- Hydr8gon: original Nintendo Switch frontend.
+- ouncebrew contributors: Switch 2 toolchain and libraries.
+- Gilead Kutnick: open-source replacement BIOS, with its retained BSD-style license.
 
-## License
-[![GNU GPLv3 Image](https://www.gnu.org/graphics/gplv3-127x51.png)](http://www.gnu.org/licenses/gpl-3.0.en.html)
-
-melonDS is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+The emulator is GPL-3.0-or-later; see `LICENSE`. The replacement BIOS has separate
+notices in `FREEBIOS-LICENSE.txt` and `src/FreeBIOS.cpp`. No game dumps, original
+Nintendo BIOS dumps, personal save files, or runtime logs are included.

@@ -21,7 +21,7 @@
 
 #include <string>
 #include <vector>
-#include <switch.h>
+#include "switch2_compat.h"
 
 using namespace std;
 

@@ -19,12 +19,15 @@
 #include <chrono>
 #include <cstring>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <cstdio>
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <glad/glad.h>
 
 #include "ui.h"
+#include "../BuiltinSystem.h"
 
 // Deal with conflicting typedefs
 #define u64 u64_
@@ -51,7 +54,7 @@ u32 displayBuffer[256 * 384];
 float topX, topY, topWidth, topHeight, botX, botY, botWidth, botHeight;
 
 Thread audio, mic;
-ClkrstSession cpuSession;
+
 AppletHookCookie cookie;
 
 AudioOutBuffer *audioReleasedBuffer;
@@ -60,6 +63,8 @@ u32 count;
 
 u8 hotkeyMask;
 bool lidClosed;
+bool builtinDirectBoot = false;
+bool audioStarted = false, micStarted = false;
 
 GLuint GL_ScreenShader[3];
 GLuint GL_ScreenShaderAccel[3];
@@ -346,13 +351,9 @@ void setScreenLayout()
     GL_ScreenSizeDirty = true;
 }
 
-void onAppletHook(AppletHookType hook, void *param)
+void onAppletHook(AppletHookType, void*)
 {
-    if (hook == AppletHookType_OnOperationMode || hook == AppletHookType_OnPerformanceMode)
-    {
-        if (R_FAILED(pcvSetClockRate(PcvModule_CpuBus, clockSpeeds[Config::SwitchOverclock])))
-            clkrstSetClockRate(&cpuSession, clockSpeeds[Config::SwitchOverclock]);
-    }
+    // Switch 1 clock profiles are not valid for Switch 2.
 }
 
 void fillAudioBuffer()
@@ -398,7 +399,7 @@ void audioOutput(void *args)
 {
     while (!(hotkeyMask & BIT(2)))
     {
-        audoutWaitPlayFinish(&audioReleasedBuffer, &count, U64_MAX);
+        audoutWaitPlayFinish(&audioReleasedBuffer, &count, UINT64_MAX);
         fillAudioBuffer();
         audoutAppendAudioOutBuffer(audioReleasedBuffer);
     }
@@ -441,7 +442,7 @@ void startCore(bool reset)
         sramStatePath = statePath + ".sav";
 
         NDS::Init();
-        NDS::LoadROM(romPath.c_str(), sramPath.c_str(), Config::DirectBoot);
+        NDS::LoadROM(romPath.c_str(), sramPath.c_str(), builtinDirectBoot || Config::DirectBoot);
     }
 
     if (Config::AudioVolume > 0)
@@ -449,25 +450,17 @@ void startCore(bool reset)
         audoutInitialize();
         audoutStartAudioOut();
         setupAudioBuffer();
-        threadCreate(&audio, audioOutput, NULL, 0x8000, 0x30, 1);
+        threadCreate(&audio, audioOutput, NULL, NULL, 0x8000, 0x30, 1);
         threadStart(&audio);
+        audioStarted = true;
     }
     if (Config::MicInputType == 1)
     {
         audinInitialize();
         audinStartAudioIn();
-        threadCreate(&mic, micInput, NULL, 0x8000, 0x30, 0);
+        threadCreate(&mic, micInput, NULL, NULL, 0x8000, 0x30, 0);
         threadStart(&mic);
-    }
-    if (Config::SwitchOverclock > 0)
-    {
-        pcvInitialize();
-        if (R_FAILED(pcvSetClockRate(PcvModule_CpuBus, clockSpeeds[Config::SwitchOverclock])))
-        {
-            clkrstInitialize();
-            clkrstOpenSession(&cpuSession, PcvModuleId_CpuBus, 0);
-            clkrstSetClockRate(&cpuSession, clockSpeeds[Config::SwitchOverclock]);
-        }
+        micStarted = true;
     }
 
     GPU3D::DeInitRenderer();
@@ -479,18 +472,20 @@ void startCore(bool reset)
 
 void pauseCore()
 {
-    threadWaitForExit(&audio);
-    threadWaitForExit(&mic);
-    if (R_FAILED(pcvSetClockRate(PcvModule_CpuBus, clockSpeeds[0])))
-    {
-        clkrstSetClockRate(&cpuSession, clockSpeeds[0]);
-        clkrstExit();
+    if (audioStarted) {
+        threadWaitForExit(&audio);
+        threadClose(&audio);
+        audoutStopAudioOut();
+        audoutExit();
+        audioStarted = false;
     }
-    pcvExit();
-    audinStopAudioIn();
-    audinExit();
-    audoutStopAudioOut();
-    audoutExit();
+    if (micStarted) {
+        threadWaitForExit(&mic);
+        threadClose(&mic);
+        audinStopAudioIn();
+        audinExit();
+        micStarted = false;
+    }
     appletUnhook(&cookie);
     appletUnlockExit();
 }
@@ -625,6 +620,7 @@ bool fileBrowser()
         }
     }
 
+    fprintf(stderr, "Selected DS game: %s\n", romPath.c_str());
     string folder = romPath.substr(0, romPath.rfind("/"));
     folder.append(1, '\0');
     strncpy(Config::LastROMFolder, folder.c_str(), folder.length());
@@ -937,8 +933,13 @@ void GLScreen_DrawScreen()
 
 int main(int argc, char **argv)
 {
+    mkdir("sdmc:/switch/melonds", 0777);
+    freopen("sdmc:/switch/melonds/switch2-startup.log", "w", stderr);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+    fprintf(stderr, "melonDS Switch 2 experimental; interpreter CPU, OpenGL frontend\n");
     initRenderer();
     Config::Load();
+    Config::SwitchOverclock = 0;
 
     // The old volume setting was scaled differently, so save upgrading users from ear rape
     if (Config::AudioVolume > 4)
@@ -953,22 +954,21 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    if (!Platform::LocalFileExists("bios7.bin") || !Platform::LocalFileExists("bios9.bin") ||
-        !Platform::LocalFileExists("firmware.bin"))
+    const int systemFiles = BuiltinSystem::EnsureFiles("sdmc:/switch/melonds");
+    if (systemFiles < 0)
     {
-        vector<string> message =
-        {
-            "One or more of the following required files don't exist or couldn't be accessed:",
-            "bios7.bin -- ARM7 BIOS",
-            "bios9.bin -- ARM9 BIOS",
-            "firmware.bin -- firmware image",
-            "Dump the files from your DS and place them in sdmc:/switch/melonds"
+        vector<string> message = {
+            "Could not prepare DS system files in sdmc:/switch/melonds.",
+            "An existing file has an invalid size, or the SD card is not writable.",
+            "Existing files were not replaced. Check switch2-startup.log."
         };
-
-        messageScreen("BIOS/Firmware not found", message, true);
+        fprintf(stderr, "System-file preparation failed\n");
+        messageScreen("DS system files", message, true);
         deinitRenderer();
         return 0;
     }
+    builtinDirectBoot = systemFiles == 1;
+    fprintf(stderr, "DS system files ready; replacement/direct-boot mode: %d\n", builtinDirectBoot);
 
     micBuffer.next = NULL;
     micBuffer.buffer = new s16[(1440 * 2 + 0xFFF) & ~0xFFF];

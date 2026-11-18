@@ -66,14 +66,15 @@ FILE* OpenLocalFile(const char* path, const char* mode)
 void* Thread_Create(void (*func)())
 {
     Thread* thread = (Thread*)malloc(sizeof(Thread));
-    threadCreate(thread, (void(*)(void*))func, NULL, 0x8000, 0x30, 2);
+    threadCreate(thread, (void(*)(void*))func, NULL, NULL, 0x8000, 0x30, 2);
     threadStart(thread);
     return thread;
 }
 
 void Thread_Free(void* thread)
 {
-    delete (Thread*)thread;
+    threadClose((Thread*)thread);
+    free(thread);
 }
 
 void Thread_Wait(void* thread)
@@ -90,7 +91,7 @@ void* Semaphore_Create()
 
 void Semaphore_Free(void* sema)
 {
-    delete (Semaphore*)sema;
+    free(sema);
 }
 
 void Semaphore_Reset(void* sema)

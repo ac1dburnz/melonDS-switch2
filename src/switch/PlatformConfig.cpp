@@ -17,7 +17,7 @@
 */
 
 #include <stdio.h>
-#include <switch.h>
+#include "switch2_compat.h"
 
 // Deal with conflicting typedefs
 #define u64 u64_

@@ -8,3 +8,14 @@ melon_grc.h
 cmake-build
 cmake-build-debug
 .idea
+
+# Local Switch 2 build outputs
+/build/
+/melonds-switch2.elf
+/melonds-switch2.nacp
+/melonds-switch2.nro
+
+# Local diagnostics and distributable archives
+/last-*.log
+/last-*.ini
+/dist/

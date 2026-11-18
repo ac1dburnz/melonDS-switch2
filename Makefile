@@ -7,7 +7,7 @@ $(error "Please set DEVKITPRO in your environment. export DEVKITPRO=<path to>/de
 endif
 
 TOPDIR ?= $(CURDIR)
-include $(DEVKITPRO)/libnx/switch_rules
+include $(DEVKITPRO)/libounce/switch2_rules
 
 #---------------------------------------------------------------------------------
 # TARGET is the name of the output
@@ -37,22 +37,22 @@ include $(DEVKITPRO)/libnx/switch_rules
 #   of a homebrew executable (.nro). This is intended to be used for sysmodules.
 #   NACP building is skipped as well.
 #---------------------------------------------------------------------------------
-TARGET		:=	melonds
+TARGET		:=	melonds-switch2
 BUILD		:=	build
 SOURCES		:=	src src/switch
 DATA		:=	data
 INCLUDES	:=	src src/switch
 ROMFS		:=	romfs
 
-APP_TITLE   := melonDS
+APP_TITLE   := melonDS Switch 2 (experimental)
 APP_AUTHOR  := Hydr8gon, Arisotura
-APP_VERSION := 0.8.3
+APP_VERSION := 0.8.3-s2-test
 ICON        := icon/melon.jpg
 
 #---------------------------------------------------------------------------------
 # options for code generation
 #---------------------------------------------------------------------------------
-ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
+ARCH	:=	$(SWITCH2_CPU) -mtp=soft -fPIE
 
 CFLAGS	:=	-g -Wall -Ofast -fno-inline-functions -ffunction-sections \
 			$(ARCH) $(DEFINES)
@@ -64,7 +64,7 @@ CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-LIBS	:= -lglad -lEGL -lglapi -ldrm_nouveau -lnx
+LIBS	:= -lglad -lEGL -lnx
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing

@@ -21,6 +21,8 @@
 #include <cstring>
 #include <dirent.h>
 #include <malloc.h>
+#include <cstdio>
+#include <cstdlib>
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -35,7 +37,7 @@ u32 uiPalette[6];
 EGLDisplay display;
 EGLContext context;
 EGLSurface surface;
-GLuint program, vbo, texture;
+GLuint program, vbo, texture, uiVao;
 
 bool showSelector = true;
 
@@ -55,6 +57,11 @@ const int charWidths[] =
     21, 21, 12, 16, 12, 20, 17, 29, 17, 17,
     16,  9,  8,  9, 12,  0, 40, 40, 40, 40
 };
+
+static unsigned int glyphIndex(unsigned char c)
+{
+    return c >= 32 && c < 32 + sizeof(charWidths)/sizeof(charWidths[0]) ? c - 32 : '?' - 32;
+}
 
 typedef struct
 {
@@ -130,7 +137,7 @@ int stringWidth(string str)
 {
     int width = 0;
     for (unsigned int i = 0; i < str.size(); i++)
-        width += charWidths[str[i] - 32];
+        width += charWidths[glyphIndex((unsigned char)str[i])];
     return width;
 }
 
@@ -172,35 +179,54 @@ void loadTheme()
 
 void initRenderer()
 {
+    const auto requireEgl = [](bool ok, const char* step) {
+        if (!ok) {
+            fprintf(stderr, "%s failed: EGL error 0x%x\n", step, eglGetError());
+            exit(EXIT_FAILURE);
+        }
+    };
     // Initialize EGL
     display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-    eglInitialize(display, NULL, NULL);
-    eglBindAPI(EGL_OPENGL_API);
+    requireEgl(eglInitialize(display, NULL, NULL), "eglInitialize");
+    requireEgl(eglBindAPI(EGL_OPENGL_API), "eglBindAPI");
     EGLConfig config;
     EGLint numConfigs;
-    eglChooseConfig(display, {}, &config, 1, &numConfigs);
+    const EGLint configAttrs[] = {EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT, EGL_SURFACE_TYPE, EGL_WINDOW_BIT, EGL_NONE};
+    requireEgl(eglChooseConfig(display, configAttrs, &config, 1, &numConfigs) && numConfigs > 0, "eglChooseConfig");
     surface = eglCreateWindowSurface(display, config, nwindowGetDefault(), NULL);
-    context = eglCreateContext(display, config, EGL_NO_CONTEXT, {});
-    eglMakeCurrent(display, surface, surface, context);
+    const EGLint contextAttrs[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 3, EGL_CONTEXT_OPENGL_PROFILE_MASK, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT, EGL_NONE};
+    requireEgl(surface != EGL_NO_SURFACE, "eglCreateWindowSurface");
+    context = eglCreateContext(display, config, EGL_NO_CONTEXT, contextAttrs);
+    requireEgl(context != EGL_NO_CONTEXT, "eglCreateContext");
+    requireEgl(eglMakeCurrent(display, surface, surface, context), "eglMakeCurrent");
 
-    gladLoadGL();
+    if (!gladLoadGL()) { fprintf(stderr, "OpenGL function loading failed\n"); exit(EXIT_FAILURE); }
+    fprintf(stderr, "OpenGL: %s; renderer: %s\n", glGetString(GL_VERSION), glGetString(GL_RENDERER));
 
     GLint vertShader = glCreateShader(GL_VERTEX_SHADER);
     glShaderSource(vertShader, 1, &vertexShader, NULL);
     glCompileShader(vertShader);
+    GLint vertexOk; glGetShaderiv(vertShader, GL_COMPILE_STATUS, &vertexOk);
+    if (!vertexOk) { char text[2048]; glGetShaderInfoLog(vertShader, sizeof(text), nullptr, text); fprintf(stderr, "UI vertex shader: %s\n", text); exit(EXIT_FAILURE); }
 
     GLint fragShader = glCreateShader(GL_FRAGMENT_SHADER);
     glShaderSource(fragShader, 1, &fragmentShader, NULL);
     glCompileShader(fragShader);
+    GLint fragmentOk; glGetShaderiv(fragShader, GL_COMPILE_STATUS, &fragmentOk);
+    if (!fragmentOk) { char text[2048]; glGetShaderInfoLog(fragShader, sizeof(text), nullptr, text); fprintf(stderr, "UI fragment shader: %s\n", text); exit(EXIT_FAILURE); }
 
     program = glCreateProgram();
     glAttachShader(program, vertShader);
     glAttachShader(program, fragShader);
     glLinkProgram(program);
+    GLint linkOk; glGetProgramiv(program, GL_LINK_STATUS, &linkOk);
+    if (!linkOk) { char text[2048]; glGetProgramInfoLog(program, sizeof(text), nullptr, text); fprintf(stderr, "UI shader link: %s\n", text); exit(EXIT_FAILURE); }
 
     glDeleteShader(vertShader);
     glDeleteShader(fragShader);
 
+    glGenVertexArrays(1, &uiVao);
+    glBindVertexArray(uiVao);
     glGenBuffers(1, &vbo);
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, position));
@@ -220,6 +246,7 @@ void initRenderer()
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
     loadTheme();
+    fprintf(stderr, "UI ready; VAO=%u, font=%p, folder=%p; GL error=0x%x\n", uiVao, (void*)font, (void*)folderIcon, glGetError());
 }
 
 void deinitRenderer()
@@ -227,6 +254,7 @@ void deinitRenderer()
     glDeleteProgram(program);
     glDeleteTextures(1, &texture);
     glDeleteBuffers(1, &vbo);
+    glDeleteVertexArrays(1, &uiVao);
 
     // Deinitialize EGL
     eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
@@ -240,7 +268,7 @@ void setSurface()
     glUseProgram(program);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glViewport(0, 0, 1280, 720);
-    glBindVertexArray(0);
+    glBindVertexArray(uiVao);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glActiveTexture(GL_TEXTURE0);
@@ -275,14 +303,14 @@ void drawString(string str, float x, float y, int size, bool right, u32 color)
     // Copy the characters from the font bitmap into the string texture
     for (unsigned int i = 0; i < str.size(); i++)
     {
-        int col = (str[i] - 32) % 10;
-        int row = (str[i] - 32) / 10;
+        int col = (glyphIndex((unsigned char)str[i])) % 10;
+        int row = (glyphIndex((unsigned char)str[i])) / 10;
 
         for (int j = 0; j < 48; j++)
-            for (int k = 0; k < charWidths[str[i] - 32]; k++)
+            for (int k = 0; k < charWidths[glyphIndex((unsigned char)str[i])]; k++)
                 tex[j * width + currentX + k] = (color & ~0xFF) | (font[(row * 512 + col) * 48 + j * 512 +  k] & 0xFF);
 
-        currentX += charWidths[str[i] - 32];
+        currentX += charWidths[glyphIndex((unsigned char)str[i])];
     }
 
     if (right) // Align the string to the right
@@ -352,7 +380,8 @@ u32 menuScreen(string title, string actionPlus, string actionX, vector<Icon> ico
 
     bool touchStarted = false;
     bool touchScroll = false;
-    touchPosition touch, touchMove;
+    touchPosition touch{}, touchMove{};
+    bool waitForRelease = true;
 
     setTextureFiltering(true);
 
@@ -368,6 +397,12 @@ u32 menuScreen(string title, string actionPlus, string actionX, vector<Icon> ico
         hidScanInput();
         u32 pressed = hidKeysDown(CONTROLLER_P1_AUTO);
         u32 released = hidKeysUp(CONTROLLER_P1_AUTO);
+        if (waitForRelease) {
+            if (hidKeysHeld(CONTROLLER_P1_AUTO) == 0 && hidTouchCount() == 0)
+                waitForRelease = false;
+            pressed = released = 0;
+        }
+        const bool touchReleased = !waitForRelease && touchStarted && hidTouchCount() == 0;
 
         if (pressed & KEY_UP && position > 0)
         {
@@ -463,7 +498,7 @@ u32 menuScreen(string title, string actionPlus, string actionX, vector<Icon> ico
         else
         {
             // Simulate a button press if the button text is touched
-            if (!touchScroll && touch.py >= 650)
+            if (touchReleased && !touchScroll && touch.py >= 650)
             {
                 if (touch.px >= boundsBX && touch.px < boundsAB)
                     return KEY_B | KEY_TOUCH;
@@ -491,7 +526,7 @@ u32 menuScreen(string title, string actionPlus, string actionX, vector<Icon> ico
                     row = i + position - 3;
 
                 // Simulate an A press on a selection if its row is touched
-                if (!touchStarted && !touchScroll && touch.px >= 90 && touch.px < 1190 && touch.py >= 124 + i * 70 && touch.py < 194 + i * 70)
+                if (touchReleased && !touchScroll && touch.px >= 90 && touch.px < 1190 && touch.py >= 124 + i * 70 && touch.py < 194 + i * 70)
                 {
                     *selection = row;
                     return KEY_A | KEY_TOUCH;
@@ -577,10 +612,12 @@ vector<string> dirContents(string directory, string extension)
     vector<string> contents;
     DIR *dir = opendir(directory.c_str());
     dirent *entry;
+    if (!dir) { fprintf(stderr, "Cannot open game directory: %s\n", directory.c_str()); return contents; }
 
     while ((entry = readdir(dir)))
     {
         string name = entry->d_name;
+        if (name == "." || name == "..") continue;
         if (entry->d_type == DT_DIR || name.find(extension, (name.length() - extension.length())) != string::npos)
             contents.push_back(name);
     }
